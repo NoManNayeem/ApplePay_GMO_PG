@@ -1,0 +1,34 @@
+# Development Dockerfile for Next.js
+FROM node:23-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install dependencies for node-gyp, healthchecks, and OpenSSL
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    wget \
+    curl \
+    openssl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm i
+
+# Copy project files
+COPY . .
+
+# Expose port
+EXPOSE 3000
+
+# Set environment to development
+ENV NODE_ENV=development
+
+# Start the development server
+CMD ["npm", "run", "dev"]
+

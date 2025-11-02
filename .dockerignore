@@ -1,0 +1,40 @@
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+README.md
+*.md
+docs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Environment files (keep structure, ignore values)
+.env
+.env.local
+.env*.local
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Docker files themselves
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# Node modules (handled in frontend/.dockerignore)
+node_modules/
+
+# Python cache (handled in backend/.dockerignore)
+__pycache__/

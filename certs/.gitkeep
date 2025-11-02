@@ -1,0 +1,4 @@
+# This directory stores SSL certificates
+# Certificates are generated automatically by Docker Compose
+# DO NOT commit actual certificates to version control
+

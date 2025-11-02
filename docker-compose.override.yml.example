@@ -1,0 +1,14 @@
+# Optional: Create this file as docker-compose.override.yml to customize settings locally
+# Docker Compose automatically loads this file if it exists (don't commit to git)
+
+services:
+  backend:
+    # Uncomment to mount local code for hot reload
+    # volumes:
+    #   - ./backend:/app
+    
+  frontend:
+    # Uncomment to mount local code for hot reload  
+    # volumes:
+    #   - ./frontend:/app
+

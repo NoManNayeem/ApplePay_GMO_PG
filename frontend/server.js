@@ -93,7 +93,7 @@ app.prepare().then(() => {
     console.log(`✅ Ready on https://${hostname}:${port}`);
     console.log(`   Access at: https://localhost:${port}`);
     console.log(`   Also try: https://127.0.0.1:${port}`);
-    console.log(`   LAN access: https://10.10.10.127:${port}`);
+    console.log(`   LAN access: https://127.0.0.1:${port}`);
     console.log(`   Note: Browser will show security warning for self-signed certificate`);
     console.log(`   Click "Advanced" → "Proceed to localhost (unsafe)" to continue`);
   });

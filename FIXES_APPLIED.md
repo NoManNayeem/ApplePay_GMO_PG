@@ -27,7 +27,7 @@ git commit -m "Remove sensitive certificate files"
 - **File**: [.env](.env)
 - **Changes**: Removed wildcard (`*`), added specific hosts
 - **Old**: `localhost,127.0.0.1,backend,*`
-- **New**: `localhost,127.0.0.1,backend,0.0.0.0,10.10.10.127`
+- **New**: `localhost,127.0.0.1,backend,0.0.0.0,localhost`
 - **Impact**: Prevents host header injection attacks
 
 ## 🍎 Apple Pay Critical Fixes
@@ -68,7 +68,7 @@ git commit -m "Remove sensitive certificate files"
 ### 8. Fix Frontend API URL
 - **File**: [.env](.env)
 - **Changes**: Changed from IP address to localhost
-- **Old**: `NEXT_PUBLIC_API_URL=https://10.10.10.127:8443`
+- **Old**: `NEXT_PUBLIC_API_URL=https://localhost:8443`
 - **New**: `NEXT_PUBLIC_API_URL=https://localhost:8443`
 - **Impact**: Works across different machines and networks
 

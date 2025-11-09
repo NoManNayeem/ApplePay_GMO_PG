@@ -56,7 +56,7 @@ Payment Failed: The merchant session was rejected by Apple Pay...
 ```
 
 **The Real Problem**:
-- Frontend at `https://10.10.10.127:3443` or `https://localhost:3443`
+- Frontend at `https://localhost:3443` or `https://localhost:3443`
 - Trying to call backend at `https://localhost:8443`
 - Browser blocked the API call because SSL certificate not accepted
 - No merchant validation request reached backend
@@ -98,7 +98,7 @@ NEXT_PUBLIC_API_URL=https://localhost:8443
 # NOT an IP address
 ```
 
-If it has an IP address like `https://10.10.10.127:8443`, change it to `https://localhost:8443`
+If it has an IP address like `https://localhost:8443`, change it to `https://localhost:8443`
 
 **Restart frontend**:
 ```bash

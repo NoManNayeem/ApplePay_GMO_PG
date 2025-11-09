@@ -24,7 +24,7 @@
 
 ### Step 1: Close ALL Browser Tabs
 
-Close any tabs with `10.10.10.127` or any other IP addresses. We need fresh start.
+Close any tabs with `localhost` or any other IP addresses. We need fresh start.
 
 ### Step 2: Accept Backend Certificate
 
@@ -283,7 +283,7 @@ cd certs
 
 ✅ **Solution**: Follow "Quick Start - Localhost" above
 
-### Scenario 2: "I'm getting the error on 10.10.10.127:3443"
+### Scenario 2: "I'm getting the error on localhost:3443"
 
 ⚠️ **Problem**: Mixing localhost config with IP access
 
@@ -401,4 +401,4 @@ POST /api/payments/validate-merchant/ 200
 3. Visit `https://localhost:3443` and accept certificate
 4. Test Apple Pay
 
-If using IP address (like `10.10.10.127`), update `.env` to use that IP and restart containers.
+If using IP address (like `localhost`), update `.env` to use that IP and restart containers.

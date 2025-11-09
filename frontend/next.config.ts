@@ -15,10 +15,23 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: [
     'https://localhost:3443',
     'https://127.0.0.1:3443',
+    'https://10.10.10.127:3443',
     'http://localhost:3000',
     'http://127.0.0.1:3000',
     'http://10.10.10.127:3000',
   ],
+  
+  // Configure webpack for custom server with polling-based HMR
+  webpack: (config, { dev, isServer }) => {
+    if (dev && !isServer) {
+      // Use polling for file watching (better for Docker/containers)
+      config.watchOptions = {
+        poll: 1000,
+        aggregateTimeout: 300,
+      };
+    }
+    return config;
+  },
 };
 
 export default nextConfig;

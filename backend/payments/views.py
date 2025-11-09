@@ -15,7 +15,7 @@ from .serializers import (
     RecurringPaymentSetupSerializer,
     RecurringPaymentChargeSerializer,
 )
-from .services import GMOClient
+from .services import GMOClient, validate_merchant_with_apple
 from .config_validator import ConfigValidator
 
 
@@ -119,31 +119,106 @@ class ValidateMerchantView(APIView):
         
         merchant_id = settings.APPLE_MERCHANT_ID
         
-        # IMPORTANT: In production, you MUST:
-        # 1. Send the validation_url to Apple's validation server
-        # 2. Use your Merchant Identity Certificate to authenticate
-        # 3. Receive and return the validated merchant session
+        # Try to validate with Apple's servers using Merchant Identity Certificate
+        # If certificates are configured, use real validation
+        # Otherwise, fall back to mock session (for testing)
+        cert_path = getattr(settings, 'APPLE_MERCHANT_IDENTITY_CERT_PATH', None)
+        key_path = getattr(settings, 'APPLE_MERCHANT_IDENTITY_KEY_PATH', None)
         
-        # For POC/testing, we create a mock merchant session
-        # NOTE: This will work for testing, but may not work in all scenarios
-        # Production requires proper validation with Apple's servers
-        import time
-        merchant_session = {
-            'merchantSessionIdentifier': f'mock-session-{int(time.time())}',
-            'displayName': 'Apple Pay POC',
-            'domainName': 'localhost',
-            'epochTimestamp': int(time.time() * 1000),
-            'expiresAt': int((time.time() + 3600) * 1000),  # 1 hour
-            'merchantIdentifier': merchant_id,
-            'nonce': f'nonce-{int(time.time())}',
-            'signature': f'signature-{int(time.time())}',  # Mock signature
-        }
+        import logging
+        logger = logging.getLogger(__name__)
         
-        return Response({
-            'merchantSession': merchant_session,
-            'merchant_id': merchant_id,
-            'note': 'Using mock merchant session for POC. Production requires proper validation with Apple servers.',
-        })
+        # Extract domain from request for better error messages and logging
+        request_host = request.META.get('HTTP_HOST', 'localhost')
+        request_domain = request_host.split(':')[0] if ':' in request_host else request_host
+        
+        # Also check Origin header for more accurate domain detection
+        origin = request.META.get('HTTP_ORIGIN', '')
+        if origin:
+            from urllib.parse import urlparse
+            parsed_origin = urlparse(origin)
+            request_domain = parsed_origin.hostname or request_domain
+        
+        logger.info(f"Merchant validation request from domain: {request_domain}")
+        logger.info(f"Validation URL: {validation_url}")
+        
+        # Check if certificate files exist - FAIL FAST if not configured
+        if not cert_path or not key_path:
+            logger.error("❌ Merchant Identity Certificate paths not configured")
+            return Response(
+                {
+                    'error': 'Apple Pay certificates not configured',
+                    'error_code': 'CERTIFICATES_NOT_CONFIGURED',
+                    'setup_required': True,
+                    'note': 'Configure APPLE_MERCHANT_IDENTITY_CERT_PATH and APPLE_MERCHANT_IDENTITY_KEY_PATH in .env file',
+                    'setup_guide': 'See GMO_PG_APPLEPAY_SETUP.md for certificate setup instructions',
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
+        from pathlib import Path
+        cert_file = Path(cert_path)
+        key_file = Path(key_path)
+
+        if not cert_file.exists() or not key_file.exists():
+            logger.error(
+                f"❌ Certificate files not found. Cert: {cert_path} (exists: {cert_file.exists()}), "
+                f"Key: {key_path} (exists: {key_file.exists()})"
+            )
+            return Response(
+                {
+                    'error': 'Apple Pay certificate files not found',
+                    'error_code': 'CERTIFICATE_FILES_NOT_FOUND',
+                    'setup_required': True,
+                    'cert_path': cert_path,
+                    'cert_exists': cert_file.exists(),
+                    'key_path': key_path,
+                    'key_exists': key_file.exists(),
+                    'note': 'Certificate files configured but not found at specified paths',
+                    'setup_guide': 'See GMO_PG_APPLEPAY_SETUP.md for certificate setup instructions',
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
+        # Use REAL merchant validation with Apple
+        logger.info("✅ Using REAL merchant validation with Apple servers")
+        logger.info(f"Certificate file: {cert_file}")
+        logger.info(f"Key file: {key_file}")
+        logger.info(f"Merchant ID: {merchant_id}")
+
+        success, result = validate_merchant_with_apple(validation_url)
+
+        if success:
+            logger.info("✅✅✅ Merchant validation SUCCESSFUL with Apple")
+            logger.info(f"Merchant session received with keys: {list(result.keys()) if isinstance(result, dict) else 'N/A'}")
+            # Return real merchant session from Apple
+            return Response({
+                'merchantSession': result,
+                'merchant_id': merchant_id,
+            })
+        else:
+            # Validation failed, return error with details
+            error_msg = result.get('error', 'Unknown error')
+            error_code = result.get('error_code', 'VALIDATION_ERROR')
+            logger.error(f"❌ Merchant validation failed: {error_code} - {error_msg}")
+            logger.error(f"Full error details: {result}")
+
+            return Response(
+                {
+                    'error': error_msg,
+                    'error_code': error_code,
+                    'merchant_id': merchant_id,
+                    'details': result.get('response', ''),
+                    'note': 'Check backend logs for detailed error information. Verify certificate validity and domain verification.',
+                    'troubleshooting': [
+                        'Ensure domain verification file is accessible at https://yourdomain/.well-known/apple-developer-merchantid-domain-association',
+                        'Verify Merchant Identity Certificate is valid and not expired',
+                        'Check that domain matches the one registered with Apple Developer account',
+                        'Ensure server supports TLS 1.2+ with required cipher suites',
+                    ]
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class OneTimePaymentSessionView(APIView):
@@ -287,11 +362,11 @@ class OneTimePaymentView(APIView):
             order_id=order_id,
             token=token
         )
-        
+
         if success and 'Status' in exec_response:
             transaction.status = 'completed'
             transaction.save()
-            
+
             return Response({
                 'transaction_id': str(transaction.transaction_id),
                 'status': 'completed',
@@ -300,15 +375,34 @@ class OneTimePaymentView(APIView):
                 'gmo_order_id': order_id,
             }, status=status.HTTP_200_OK)
         else:
-            transaction.status = 'failed'
+            # ExecTran failed - rollback the transaction using AlterTran
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"ExecTran failed for transaction {transaction.transaction_id}, attempting rollback")
+
+            # Attempt to void/cancel the transaction
+            rollback_success, rollback_response = gmo_client.alter_tran(
+                access_id=access_id,
+                access_pass=access_pass,
+                job_cd='VOID'
+            )
+
+            if rollback_success:
+                logger.info(f"Transaction {transaction.transaction_id} successfully rolled back (voided)")
+                transaction.status = 'cancelled'
+            else:
+                logger.error(f"Failed to rollback transaction {transaction.transaction_id}: {rollback_response}")
+                transaction.status = 'failed'
+
             transaction.error_code = exec_response.get('error_code', 'EXEC_ERROR')
             transaction.error_message = exec_response.get('error_info', 'Transaction execution failed')
             transaction.save()
-            
+
             return Response({
                 'transaction_id': str(transaction.transaction_id),
-                'status': 'failed',
+                'status': transaction.status,
                 'error': exec_response.get('error_info', 'Transaction execution failed'),
+                'rolled_back': rollback_success,
             }, status=status.HTTP_400_BAD_REQUEST)
 
 

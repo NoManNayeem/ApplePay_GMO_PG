@@ -4,10 +4,15 @@
 .env.*.local
 env.txt.backup
 
-# SSL Certificates
+# SSL Certificates (CRITICAL: Never commit private keys!)
 certs/*.key
 certs/*.crt
+certs/*.pem
+certs/*.p12
+certs/*.pfx
+certs/*.cer
 !certs/.gitkeep
+!certs/README.txt
 
 # Python
 __pycache__/

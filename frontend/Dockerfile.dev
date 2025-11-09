@@ -29,6 +29,7 @@ EXPOSE 3000
 # Set environment to development
 ENV NODE_ENV=development
 
-# Start the development server
-CMD ["npm", "run", "dev"]
+# Start the development server with HTTPS
+# Use server.js which disables Turbopack and provides HTTPS
+CMD ["npm", "run", "dev:https"]
 

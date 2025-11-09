@@ -34,40 +34,62 @@ export default function ApplePayButton({
   const sessionRef = useRef<any>(null);
 
   useEffect(() => {
+    console.log('🔵 [ApplePayButton] Component mounted');
+    console.log('🔵 [ApplePayButton] Window object:', typeof window);
+    console.log('🔵 [ApplePayButton] ApplePaySession available:', !!window.ApplePaySession);
+
     // Check if Apple Pay is available
     if (typeof window !== 'undefined' && window.ApplePaySession) {
       const canMakePayments = window.ApplePaySession.canMakePayments();
+      console.log('🔵 [ApplePayButton] Can make payments:', canMakePayments);
       setIsApplePayAvailable(canMakePayments);
+    } else {
+      console.log('🔴 [ApplePayButton] Apple Pay NOT available - not in browser or no ApplePaySession');
     }
   }, []);
 
   const handlePaymentClick = () => {
+    console.log('🟢 [ApplePayButton] ========================================');
+    console.log('🟢 [ApplePayButton] BUTTON CLICKED!');
+    console.log('🟢 [ApplePayButton] Amount:', amount, 'Currency:', currency);
+    console.log('🟢 [ApplePayButton] Is processing:', isProcessing);
+    console.log('🟢 [ApplePayButton] ========================================');
+
     // CRITICAL: Apple Pay session must be created synchronously within user gesture handler
     // Any async operations must happen AFTER session creation, in event handlers
     if (isProcessing || parseFloat(amount.toString()) <= 0) {
+      console.log('🔴 [ApplePayButton] Aborting - already processing or invalid amount');
       return;
     }
 
     if (!window.ApplePaySession) {
+      console.log('🔴 [ApplePayButton] Apple Pay is not available');
       onError?.('Apple Pay is not available');
       return;
     }
 
+    console.log('🟢 [ApplePayButton] Setting processing state to true');
     setIsProcessing(true);
 
     try {
+      console.log('🟢 [ApplePayButton] Creating payment request...');
+
       // Create payment request object (synchronous)
+      // Note: merchantIdentifier is NOT included here - it's validated server-side
+      // The merchantIdentifier must match what's configured in Apple Developer Portal
       const paymentRequest = {
         countryCode: 'JP',
         currencyCode: currency,
-        merchantCapabilities: ['supports3DS'],
-        supportedNetworks: ['visa', 'masterCard', 'amex', 'discover'],
+        merchantCapabilities: ['supports3DS', 'supportsCredit', 'supportsDebit'],
+        supportedNetworks: ['visa', 'masterCard', 'amex', 'discover', 'jcb'],
         total: {
           label: label,
           amount: amount.toString(),
           type: 'final',
         },
       };
+
+      console.log('🟢 [ApplePayButton] Payment request created:', paymentRequest);
 
       // Add recurring payment info if applicable
       // According to 2025 Apple Pay documentation, recurringPaymentRequestItem should be used
@@ -85,56 +107,113 @@ export default function ApplePayButton({
         };
       }
 
+      console.log('🟢 [ApplePayButton] Creating Apple Pay session...');
+
       // CRITICAL: Create Apple Pay session IMMEDIATELY (synchronously) within user gesture handler
       // Do NOT await anything before this line
       const session = new window.ApplePaySession(3, paymentRequest);
       sessionRef.current = session;
+      // Track when session started to detect early cancellations
+      (session as any)._startTime = Date.now();
+
+      console.log('✅ [ApplePayButton] Apple Pay session created successfully!');
+      console.log('🟢 [ApplePayButton] Session object:', session);
 
       // Handle merchant validation (async operations happen here)
       session.onvalidatemerchant = async (event: any) => {
+        console.log('🟡 [ApplePayButton] ========================================');
+        console.log('🟡 [ApplePayButton] MERCHANT VALIDATION EVENT TRIGGERED!');
+        console.log('🟡 [ApplePayButton] Event:', event);
+        console.log('🟡 [ApplePayButton] ========================================');
+
         try {
           // Extract validation URL from the event (required by Apple Pay)
           const validationURL = event.validationURL;
-          
+
+          console.log('🟡 [ApplePayButton] Validation URL:', validationURL);
+
           if (!validationURL) {
-            console.error('[Apple Pay] Missing validationURL in event:', event);
+            console.error('🔴 [Apple Pay] Missing validationURL in event:', event);
             session.abort();
             setIsProcessing(false);
             onError?.('Invalid merchant validation request');
             return;
           }
 
-          console.log('[Apple Pay] Validating merchant with URL:', validationURL);
+          console.log('🟡 [Apple Pay] Calling backend API to validate merchant...');
+          console.log('🟡 [Apple Pay] API endpoint: /api/payments/validate-merchant/');
 
           // Send validation URL to backend to get merchant session
           // The backend should validate with Apple's servers and return merchant session
           const validationResponse = await api.validateMerchantSession(validationURL);
+
+          console.log('🟡 [Apple Pay] Backend response received!');
+          console.log('🟡 [Apple Pay] Response:', validationResponse);
+          
+          console.log('[Apple Pay] Validation response:', validationResponse);
           
           if (validationResponse && validationResponse.merchantSession) {
+            // Check if this is a mock session (will be rejected by Apple Pay)
+            // Only show warning if backend explicitly indicates it's a mock session
+            const isMockSession = validationResponse.warning || validationResponse.setup_required;
+            
+            if (isMockSession) {
+              console.warn('[Apple Pay] ⚠️  MOCK MERCHANT SESSION DETECTED');
+              console.warn('[Apple Pay] This session will be REJECTED by Apple Pay because it is not properly signed.');
+              console.warn('[Apple Pay] Apple Pay requires proper merchant validation with Apple servers.');
+              console.warn('[Apple Pay] Backend note:', validationResponse.note || 'No details provided');
+            } else {
+              console.log('[Apple Pay] ✅ Real merchant session received from Apple');
+            }
+            
             // Complete merchant validation with the merchant session from backend
-            // The merchantSession should be a JSON string containing the validated session
-            session.completeMerchantValidation(validationResponse.merchantSession);
+            // completeMerchantValidation expects a JSON string, not an object
+            const merchantSessionString = typeof validationResponse.merchantSession === 'string' 
+              ? validationResponse.merchantSession 
+              : JSON.stringify(validationResponse.merchantSession);
+            
+            console.log('[Apple Pay] Completing merchant validation with session');
+            try {
+              session.completeMerchantValidation(merchantSessionString);
+              console.log('[Apple Pay] Merchant validation completed successfully');
+              
+              // Only warn if it's explicitly a mock session
+              if (isMockSession) {
+                console.warn('[Apple Pay] ⚠️  Note: Mock sessions are typically rejected by Apple Pay immediately after validation.');
+              }
+            } catch (validationError: any) {
+              // If completeMerchantValidation throws an error, the session will be cancelled
+              console.error('[Apple Pay] Merchant validation completion failed:', validationError);
+              session.abort();
+              setIsProcessing(false);
+              onError?.('Merchant session validation failed. This may be due to an invalid or mock merchant session. Please ensure proper Apple Pay merchant setup.');
+            }
           } else {
-            console.error('[Apple Pay] Merchant validation failed:', validationResponse);
+            const errorMsg = validationResponse?.error || 'Merchant validation failed - no merchant session returned';
+            console.error('[Apple Pay] Merchant validation failed:', errorMsg, validationResponse);
             session.abort();
             setIsProcessing(false);
-            onError?.(validationResponse?.error || 'Merchant validation failed');
+            onError?.(errorMsg);
           }
         } catch (error: any) {
-          console.error('[Apple Pay] Merchant validation error:', error);
+          const errorMsg = error.apiError || error.response?.data?.error || error.response?.data?.error_message || error.message || 'Merchant validation error';
+          console.error('[Apple Pay] Merchant validation error:', errorMsg, error);
           session.abort();
           setIsProcessing(false);
-          onError?.(error.message || 'Merchant validation error');
+          onError?.(errorMsg);
         }
       };
 
       // Handle payment authorization
       session.onpaymentauthorized = async (event: any) => {
         try {
+          console.log('[Apple Pay] Payment authorized, processing...');
           const paymentToken = event.payment.token;
+          console.log('[Apple Pay] Payment token received:', paymentToken ? 'Token present' : 'Token missing');
 
           // Send payment token to backend for processing
           if (recurring) {
+            console.log('[Apple Pay] Processing recurring payment...');
             const result = await api.setupRecurringPayment({
               token: JSON.stringify(paymentToken),
               amount: amount,
@@ -142,48 +221,91 @@ export default function ApplePayButton({
               billing_cycle: billingCycle,
             });
 
+            console.log('[Apple Pay] Recurring payment result:', result);
+
             if (result.status === 'active') {
+              console.log('[Apple Pay] Recurring payment successful');
               session.completePayment(window.ApplePaySession.STATUS_SUCCESS);
               setIsProcessing(false);
               onSuccess?.(result);
             } else {
+              const errorMsg = result.error || 'Payment setup failed';
+              console.error('[Apple Pay] Recurring payment failed:', errorMsg, result);
               session.completePayment(window.ApplePaySession.STATUS_FAILURE);
               setIsProcessing(false);
-              onError?.(result.error || 'Payment failed');
+              onError?.(errorMsg);
             }
           } else {
+            console.log('[Apple Pay] Processing one-time payment...');
             const result = await api.processOneTimePayment({
               token: JSON.stringify(paymentToken),
               amount: amount,
               currency: currency,
             });
 
+            console.log('[Apple Pay] One-time payment result:', result);
+
             if (result.status === 'completed') {
+              console.log('[Apple Pay] One-time payment successful');
               session.completePayment(window.ApplePaySession.STATUS_SUCCESS);
               setIsProcessing(false);
               onSuccess?.(result);
             } else {
+              const errorMsg = result.error || 'Payment processing failed';
+              console.error('[Apple Pay] One-time payment failed:', errorMsg, result);
               session.completePayment(window.ApplePaySession.STATUS_FAILURE);
               setIsProcessing(false);
-              onError?.(result.error || 'Payment failed');
+              onError?.(errorMsg);
             }
           }
         } catch (error: any) {
+          const errorMsg = error.apiError || error.response?.data?.error || error.response?.data?.error_message || error.message || 'Payment processing error';
+          console.error('[Apple Pay] Payment processing exception:', errorMsg, error);
           session.completePayment(window.ApplePaySession.STATUS_FAILURE);
           setIsProcessing(false);
-          onError?.(error.message || 'Payment processing error');
+          onError?.(errorMsg);
         }
       };
 
-      // Handle cancellation
+      // Handle cancellation - this can be triggered by:
+      // 1. User explicitly cancelling
+      // 2. Merchant validation failure (most common with mock sessions)
+      // 3. Invalid merchant session
+      // 4. Other Apple Pay errors
       session.oncancel = () => {
+        console.log('🔴 [ApplePayButton] ========================================');
+        console.log('🔴 [ApplePayButton] PAYMENT SESSION CANCELLED!');
+        console.log('🔴 [ApplePayButton] ========================================');
+        console.warn('[Apple Pay] Payment session cancelled');
         setIsProcessing(false);
-        onError?.('Payment cancelled');
+        // Check if we have a more specific error message
+        // If the session was cancelled immediately after validation, it's likely a validation issue
+        const timeSinceStart = Date.now() - (sessionRef.current?._startTime || Date.now());
+        if (timeSinceStart < 3000) {
+          // Cancelled within 3 seconds - likely a validation issue (mock session rejection)
+          onError?.(
+            'Payment cancelled: The merchant session was rejected by Apple Pay. ' +
+            '⚠️  This is expected with MOCK merchant sessions. ' +
+            'Apple Pay requires a properly signed merchant session from Apple\'s validation servers. ' +
+            'To use Apple Pay, you must implement proper merchant validation with a Merchant Identity Certificate. ' +
+            'See the documentation for setup instructions.'
+          );
+        } else {
+          onError?.('Payment cancelled. This may be due to merchant validation failure or invalid configuration.');
+        }
       };
+
+      console.log('🟢 [ApplePayButton] Starting Apple Pay session...');
 
       // Start the session (must be called synchronously after creation)
       session.begin();
+
+      console.log('✅ [ApplePayButton] Session.begin() called - waiting for Apple Pay sheet...');
     } catch (error: any) {
+      console.error('🔴 [ApplePayButton] ERROR creating Apple Pay session!');
+      console.error('🔴 [ApplePayButton] Error:', error);
+      console.error('🔴 [ApplePayButton] Error message:', error.message);
+      console.error('🔴 [ApplePayButton] Stack:', error.stack);
       setIsProcessing(false);
       onError?.(error.message || 'Failed to initialize Apple Pay');
     }

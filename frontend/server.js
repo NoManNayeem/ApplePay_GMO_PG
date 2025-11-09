@@ -1,3 +1,10 @@
+// CRITICAL: Disable Turbopack BEFORE importing Next.js
+// Turbopack is enabled by default in Next.js 16, but has stability issues in Docker
+// Setting this environment variable before Next.js loads prevents Turbopack initialization
+process.env.NEXT_TURBO = '0';
+// Also ensure webpack is used
+process.env.NEXT_WEBPACK = '1';
+
 const { createServer } = require('https');
 const { parse } = require('url');
 const next = require('next');
@@ -10,11 +17,12 @@ const port = parseInt(process.env.PORT || '3443', 10); // HTTPS port
 
 // Disable Turbopack to avoid internal errors - use webpack instead
 // Turbopack is enabled by default in Next.js 16, but has stability issues
-// We disable it explicitly in the config and ensure webpack is used
+// We've already set NEXT_TURBO=0 above before importing Next.js
+
 const app = next({ 
   dev,
-  // Note: turbo option is not directly supported in next() constructor
-  // Disable via environment variable instead
+  // Explicitly disable Turbopack - use webpack instead
+  // This prevents the "inner_of_uppers_lost_follower" crash in Docker
 });
 
 const handle = app.getRequestHandler();
@@ -62,6 +70,21 @@ app.prepare().then(() => {
     }
   });
 
+  // Don't handle WebSocket upgrades - Next.js will use polling for HMR
+  // This prevents the "getHeader is not a function" error
+  // HMR will work via polling instead of WebSocket
+  server.on('upgrade', (request, socket, head) => {
+    const { pathname } = parse(request.url, true);
+    // Only reject Next.js HMR WebSocket connections, allow other WebSocket connections
+    if (pathname && pathname.startsWith('/_next/webpack-hmr')) {
+      // Silently reject HMR WebSocket upgrades - Next.js will fall back to polling
+      socket.destroy();
+    } else {
+      // For other WebSocket connections, also reject (or handle if needed)
+      socket.destroy();
+    }
+  });
+
   server.listen(port, hostname, (err) => {
     if (err) {
       console.error('❌ Failed to start HTTPS server:', err);
@@ -70,6 +93,7 @@ app.prepare().then(() => {
     console.log(`✅ Ready on https://${hostname}:${port}`);
     console.log(`   Access at: https://localhost:${port}`);
     console.log(`   Also try: https://127.0.0.1:${port}`);
+    console.log(`   LAN access: https://10.10.10.127:${port}`);
     console.log(`   Note: Browser will show security warning for self-signed certificate`);
     console.log(`   Click "Advanced" → "Proceed to localhost (unsafe)" to continue`);
   });
@@ -85,6 +109,11 @@ app.prepare().then(() => {
       res.statusCode = 500;
       res.end('internal server error');
     }
+  });
+
+  // Don't handle WebSocket upgrades for HTTP server either
+  httpServer.on('upgrade', (request, socket, head) => {
+    socket.destroy();
   });
 
   httpServer.listen(3000, hostname, (err) => {

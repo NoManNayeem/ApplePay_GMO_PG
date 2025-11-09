@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(openssl x509:*)",
+      "Bash(openssl rsa:*)",
+      "Bash(docker-compose restart:*)",
+      "Bash(curl:*)",
+      "Bash(docker-compose logs:*)",
+      "Bash(docker-compose exec:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

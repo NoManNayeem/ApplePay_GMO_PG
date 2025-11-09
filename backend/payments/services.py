@@ -3,7 +3,9 @@ from django.conf import settings
 from typing import Dict, Optional, Tuple
 import logging
 import json
+import os
 from requests.exceptions import RequestException, Timeout, ConnectionError, HTTPError
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -261,4 +263,225 @@ class GMOClient:
         }
         
         return self._make_request('POST', 'ExecTran.idPass', data)
+
+    def alter_tran(
+        self,
+        access_id: str,
+        access_pass: str,
+        job_cd: str = 'VOID'
+    ) -> Tuple[bool, Dict]:
+        """
+        Alter/cancel a transaction (for rollback when ExecTran fails)
+
+        Args:
+            access_id: Access ID from EntryTran
+            access_pass: Access Pass from EntryTran
+            job_cd: Job code - VOID (cancel), RETURN (refund), etc.
+
+        Returns:
+            Tuple of (success: bool, response_data)
+
+        Note:
+            VOID cancels a transaction before capture
+            Use this for rollback when EntryTran succeeds but ExecTran fails
+        """
+        data = {
+            'AccessID': access_id,
+            'AccessPass': access_pass,
+            'JobCd': job_cd,
+        }
+
+        return self._make_request('POST', 'AlterTran.idPass', data)
+
+
+def validate_merchant_with_apple(validation_url: str) -> Tuple[bool, Dict]:
+    """
+    Validate merchant session with Apple's servers using Merchant Identity Certificate.
+    
+    This function sends the validation URL to Apple's validation servers and receives
+    a properly signed merchant session that Apple Pay will accept.
+    
+    Args:
+        validation_url: The validation URL provided by Apple Pay in the onvalidatemerchant event
+        
+    Returns:
+        Tuple of (success: bool, merchant_session_dict or error_dict)
+        
+    Note:
+        Requires APPLE_MERCHANT_IDENTITY_CERT_PATH and APPLE_MERCHANT_IDENTITY_KEY_PATH
+        to be configured in settings with valid certificate files.
+    """
+    cert_path = getattr(settings, 'APPLE_MERCHANT_IDENTITY_CERT_PATH', None)
+    key_path = getattr(settings, 'APPLE_MERCHANT_IDENTITY_KEY_PATH', None)
+    
+    if not cert_path or not key_path:
+        logger.error("Merchant Identity Certificate paths not configured")
+        return False, {
+            'error': 'Merchant Identity Certificate not configured',
+            'error_code': 'CERT_NOT_CONFIGURED'
+        }
+    
+    # Check if certificate files exist
+    cert_file = Path(cert_path)
+    key_file = Path(key_path)
+    
+    if not cert_file.exists():
+        logger.error(f"Merchant Identity Certificate not found: {cert_path}")
+        return False, {
+            'error': f'Merchant Identity Certificate file not found: {cert_path}',
+            'error_code': 'CERT_FILE_NOT_FOUND'
+        }
+    
+    if not key_file.exists():
+        logger.error(f"Merchant Identity Key not found: {key_path}")
+        return False, {
+            'error': f'Merchant Identity Key file not found: {key_path}',
+            'error_code': 'KEY_FILE_NOT_FOUND'
+        }
+    
+    try:
+        # Send validation request to Apple's servers with client certificate
+        # Apple's validation endpoint requires:
+        # 1. Merchant Identity Certificate for client certificate authentication
+        # 2. POST body with merchantIdentifier (per Apple's 2025 documentation)
+        merchant_id = getattr(settings, 'APPLE_MERCHANT_ID', None)
+        
+        if not merchant_id:
+            logger.error("APPLE_MERCHANT_ID not configured")
+            return False, {
+                'error': 'Merchant ID not configured',
+                'error_code': 'MERCHANT_ID_NOT_CONFIGURED'
+            }
+        
+        logger.info(f"Validating merchant with Apple: {validation_url}")
+        logger.info(f"Using Merchant ID: {merchant_id}")
+        logger.info(f"Certificate: {cert_file}, Key: {key_file}")
+        
+        # Apple Pay merchant validation format (per Apple's official documentation 2023-2024):
+        # POST to validation_url with:
+        # 1. Client certificate authentication (Merchant Identity Certificate) - REQUIRED
+        # 2. JSON body with required fields:
+        #    - merchantIdentifier: Your merchant ID
+        #    - displayName: Store name displayed to users
+        #    - initiative: "web" for web-based transactions
+        #    - initiativeContext: Fully qualified domain name
+        
+        # Extract domain from validation URL or use request domain
+        import re
+        from urllib.parse import urlparse, parse_qs
+        
+        # Try to extract domain from validation URL query parameters
+        parsed_url = urlparse(validation_url)
+        query_params = parse_qs(parsed_url.query)
+        request_domain = None
+        
+        if 'initiativeContext' in query_params:
+            request_domain = query_params['initiativeContext'][0]
+        else:
+            # Fallback: try regex extraction
+            domain_match = re.search(r'initiativeContext=([^&]+)', validation_url)
+            if domain_match:
+                request_domain = domain_match.group(1)
+        
+        # If still no domain, use a default (for localhost testing)
+        if not request_domain:
+            request_domain = 'localhost'
+            logger.warning("Domain not found in validation URL, using 'localhost' as fallback")
+        
+        # Per Apple's official documentation (2023-2024), the request body MUST include:
+        request_body = {
+            'merchantIdentifier': merchant_id,
+            'displayName': 'Apple Pay POC',  # Store name displayed to users
+            'initiative': 'web',  # Required: "web" for web-based transactions
+            'initiativeContext': request_domain,  # Fully qualified domain name
+        }
+        
+        logger.info(f"Request domain/initiativeContext: {request_domain}")
+        logger.debug(f"Request body: {request_body}")
+        
+        # Attempt validation with SSL verification first
+        # Per Apple's official documentation, the request MUST include the JSON body
+        try:
+            response = requests.post(
+                validation_url,
+                json=request_body,  # REQUIRED: JSON body with merchantIdentifier, displayName, initiative, initiativeContext
+                cert=(str(cert_file), str(key_file)),  # REQUIRED: Client certificate authentication
+                timeout=15,  # Increased timeout for Apple's servers
+                headers={
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Django-ApplePay-POC/1.0',
+                    'Accept': 'application/json'
+                },
+                verify=True,  # Verify Apple's SSL certificate
+            )
+            response.raise_for_status()
+        except requests.exceptions.SSLError as ssl_error:
+            logger.error(f"SSL error during merchant validation: {str(ssl_error)}")
+            # Try with verify=False for debugging (NOT recommended for production)
+            logger.warning("Retrying with SSL verification disabled (for debugging only)")
+            try:
+                response = requests.post(
+                    validation_url,
+                    json=request_body,  # Include request body in retry
+                    cert=(str(cert_file), str(key_file)),
+                    timeout=15,
+                    headers={
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Django-ApplePay-POC/1.0',
+                        'Accept': 'application/json'
+                    },
+                    verify=False  # Only for debugging - remove in production
+                )
+                response.raise_for_status()
+            except Exception as retry_error:
+                logger.error(f"Retry also failed: {str(retry_error)}")
+                raise
+        except Exception as e:
+            # Re-raise other exceptions to be handled by outer try-except
+            raise
+        
+        # Apple returns the merchant session as JSON
+        merchant_session = response.json()
+        
+        logger.info("Merchant validation successful with Apple")
+        logger.debug(f"Merchant session received: {merchant_session}")
+        return True, merchant_session
+        
+    except Timeout:
+        logger.error(f"Apple merchant validation timeout: {validation_url}")
+        return False, {
+            'error': 'Apple validation request timeout',
+            'error_code': 'VALIDATION_TIMEOUT'
+        }
+    except ConnectionError as e:
+        logger.error(f"Apple merchant validation connection error: {str(e)}")
+        return False, {
+            'error': 'Failed to connect to Apple validation servers',
+            'error_code': 'VALIDATION_CONNECTION_ERROR'
+        }
+    except HTTPError as e:
+        logger.error(f"Apple merchant validation HTTP error: {e.response.status_code} - {e.response.text}")
+        return False, {
+            'error': f'Apple validation failed: HTTP {e.response.status_code}',
+            'error_code': f'VALIDATION_HTTP_{e.response.status_code}',
+            'response': e.response.text
+        }
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Apple merchant validation request error: {str(e)}")
+        return False, {
+            'error': f'Apple validation request failed: {str(e)}',
+            'error_code': 'VALIDATION_REQUEST_ERROR'
+        }
+    except json.JSONDecodeError as e:
+        logger.error(f"Apple merchant validation JSON decode error: {str(e)}")
+        return False, {
+            'error': 'Invalid response from Apple validation servers',
+            'error_code': 'VALIDATION_JSON_ERROR'
+        }
+    except Exception as e:
+        logger.exception(f"Unexpected error in Apple merchant validation: {str(e)}")
+        return False, {
+            'error': f'Unexpected validation error: {str(e)}',
+            'error_code': 'VALIDATION_UNEXPECTED_ERROR'
+        }
 

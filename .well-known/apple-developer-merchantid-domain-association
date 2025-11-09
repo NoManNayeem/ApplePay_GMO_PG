@@ -1,0 +1,22 @@
+# Apple Pay Domain Verification File
+# 
+# IMPORTANT: This is a placeholder file for the POC.
+# 
+# To set up Apple Pay domain verification:
+# 
+# 1. Log in to your Apple Developer account
+# 2. Go to Certificates, Identifiers & Profiles
+# 3. Select your Merchant ID
+# 4. Click "Configure" next to Apple Pay
+# 5. Add your domain (e.g., yourdomain.com)
+# 6. Download the domain association file
+# 7. Replace this file with the downloaded content
+# 8. Ensure the file is accessible at:
+#    https://yourdomain.com/.well-known/apple-developer-merchantid-domain-association
+#
+# For local development, you may need to:
+# - Use ngrok or similar to create a public HTTPS URL
+# - Configure your domain in Apple Developer portal
+# - Test with Apple Pay in Safari on a real device
+#
+# The actual file should contain JSON with your merchant ID and domain verification data.

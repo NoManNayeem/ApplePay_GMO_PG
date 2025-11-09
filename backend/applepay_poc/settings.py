@@ -204,6 +204,17 @@ GMO_API_ENDPOINT = config('GMO_API_ENDPOINT', default='https://pt01.mul-pay.jp')
 # Apple Pay configuration
 APPLE_MERCHANT_ID = config('APPLE_MERCHANT_ID', default='')
 
+# Apple Pay Merchant Identity Certificate paths
+# These are used for merchant session validation with Apple's servers
+APPLE_MERCHANT_IDENTITY_CERT_PATH = config(
+    'APPLE_MERCHANT_IDENTITY_CERT_PATH',
+    default=str(BASE_DIR.parent / 'certs' / 'merchant-identity-cert.pem')
+)
+APPLE_MERCHANT_IDENTITY_KEY_PATH = config(
+    'APPLE_MERCHANT_IDENTITY_KEY_PATH',
+    default=str(BASE_DIR.parent / 'certs' / 'merchant-identity-key.pem')
+)
+
 # Validate configuration on startup (import config_validator to trigger validation)
 try:
     from payments.config_validator import ConfigValidator

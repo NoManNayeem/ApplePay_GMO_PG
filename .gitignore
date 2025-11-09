@@ -4,6 +4,11 @@
 .env.*.local
 env.txt.backup
 
+
+.well-known.zip
+certs.zip
+
+
 # SSL Certificates (CRITICAL: Never commit private keys!)
 certs/*.key
 certs/*.crt
